@@ -301,6 +301,64 @@ func (w whatsmeowService) ForceUpdateJid(instanceId string, number string) error
 	return nil
 }
 
+// The whatsmeow auth store is shared by all clients in this process. Creating a
+// container in every StartClient call leaks a separate *sql.DB pool on each
+// reconnect and can eventually exhaust PostgreSQL connections.
+//
+// Only a successful initialization is cached. If the database is unavailable
+// during startup, the next call retries instead of retaining the first error
+// until the process restarts.
+var (
+	sharedAuthContainer   *sqlstore.Container
+	sharedAuthContainerMu sync.Mutex
+)
+
+func (w whatsmeowService) getAuthContainer() (*sqlstore.Container, error) {
+	sharedAuthContainerMu.Lock()
+	defer sharedAuthContainerMu.Unlock()
+
+	if sharedAuthContainer != nil {
+		return sharedAuthContainer, nil
+	}
+
+	var dbLog waLog.Logger
+	if w.config.WaDebug != "" {
+		dbLog = waLog.Stdout("Database", w.config.WaDebug, true)
+	}
+
+	var dialect, address string
+	if w.config.PostgresAuthDB != "" {
+		dialect = "postgres"
+		address = w.config.PostgresAuthDB
+	} else {
+		dialect = "sqlite"
+		address = fmt.Sprintf("file:%s/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=5000&cache=shared&mode=rwc&_journal_mode=WAL", w.exPath)
+	}
+
+	db, err := sql.Open(dialect, address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open auth database: %w", err)
+	}
+
+	if dialect == "postgres" {
+		db.SetMaxOpenConns(20)
+		db.SetMaxIdleConns(5)
+		db.SetConnMaxLifetime(5 * time.Minute)
+		db.SetConnMaxIdleTime(2 * time.Minute)
+	} else {
+		db.SetMaxOpenConns(1)
+	}
+
+	container := sqlstore.NewWithDB(db, dialect, dbLog)
+	if err := container.Upgrade(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to upgrade auth database: %w", err)
+	}
+
+	sharedAuthContainer = container
+	return sharedAuthContainer, nil
+}
+
 func (w whatsmeowService) StartClient(cd *ClientData) {
 
 	w.loggerWrapper.GetLogger(cd.Instance.Id).LogInfo("Starting websocket connection to Whatsapp for user '%s'", cd.Instance.Id)
@@ -314,27 +372,9 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 		}
 	}
 
-	var container *sqlstore.Container
-
-	if w.config.WaDebug != "" {
-		dbLog := waLog.Stdout("Database", w.config.WaDebug, true)
-		if w.config.PostgresAuthDB != "" {
-			container, err = sqlstore.New(context.Background(), "postgres", w.config.PostgresAuthDB, dbLog)
-		} else {
-			dsn := fmt.Sprintf("file:%s/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=5000&cache=shared&mode=rwc&_journal_mode=WAL", w.exPath)
-			container, err = sqlstore.New(context.Background(), "sqlite", dsn, dbLog)
-		}
-	} else {
-		if w.config.PostgresAuthDB != "" {
-			container, err = sqlstore.New(context.Background(), "postgres", w.config.PostgresAuthDB, nil)
-		} else {
-			dsn := fmt.Sprintf("file:%s/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=5000&cache=shared&mode=rwc&_journal_mode=WAL", w.exPath)
-			container, err = sqlstore.New(context.Background(), "sqlite", dsn, nil)
-		}
-	}
-
+	container, err := w.getAuthContainer()
 	if err != nil {
-		w.loggerWrapper.GetLogger(cd.Instance.Id).LogError("[%s] Failed to create container: %v", cd.Instance.Id, err)
+		w.loggerWrapper.GetLogger(cd.Instance.Id).LogError("[%s] Failed to get auth container: %v", cd.Instance.Id, err)
 		return
 	}
 
