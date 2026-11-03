@@ -340,6 +340,13 @@ func main() {
 
 	cfg := config.Load()
 
+	// 在任何账号连接或自动重连启动前设置全局握手版本。
+	waVersion, source, err := whatsmeow_service.InitializeWhatsAppVersion(cfg)
+	if err != nil {
+		log.Fatal("Failed to initialize WhatsApp handshake version: ", err)
+	}
+	logger.LogInfo("WhatsApp handshake version initialized to %s (source=%s)", waVersion, source)
+
 	logger.LogInfo("Starting Evolution GO version %s", version)
 
 	startTime := time.Now()

@@ -1,5 +1,12 @@
 # Evolution GO - Changelog
 
+## v0.7.2-kowauto.1
+
+- 修复 WhatsApp Web 版本已更新但实际握手仍使用旧版本导致的 `Client outdated (405)`。
+- 在进程启动、所有账号连接之前统一设置 `store.SetWAVersion`，保留既有认证连接池补丁和协议依赖。
+- 版本获取最多等待 15 秒；配置不完整或获取失败时明确启动失败，避免静默使用已失效的编译期版本。
+- 不修改实例、会话或数据库结构；发布与回滚说明见 `docs/whatsapp-version-fix.md`。
+
 ## v0.7.2
 
 **Docker:** `evoapicloud/evolution-go:0.7.2`
