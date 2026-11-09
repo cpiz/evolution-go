@@ -7,6 +7,7 @@ import (
 	"github.com/gomessguii/logger"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	label_model "github.com/evolution-foundation/evolution-go/pkg/label/model"
 	label_repository "github.com/evolution-foundation/evolution-go/pkg/label/repository"
@@ -22,6 +23,7 @@ type InstanceRepository interface {
 	GetInstanceByToken(token string) (*instance_model.Instance, error)
 	GetInstanceByName(name string) (*instance_model.Instance, error)
 	Update(*instance_model.Instance) error
+	UpdateConnectionSettings(instance *instance_model.Instance, webhookURL *string) error
 	UpdateConnected(userId string, status bool, disconnectReason string) error
 	UpdateQrcode(userId string, qr string) error
 	UpdateProxy(userId string, proxy string) error
@@ -98,6 +100,26 @@ func (i *instanceRepository) Update(instance *instance_model.Instance) error {
 		logger.LogError("Error updating instance in DB: %v", err)
 	}
 	return err
+}
+
+func (i *instanceRepository) UpdateConnectionSettings(instance *instance_model.Instance, webhookURL *string) error {
+	settings := map[string]any{
+		"events":            instance.Events,
+		"rabbitmq_enable":   instance.RabbitmqEnable,
+		"nats_enable":       instance.NatsEnable,
+		"web_socket_enable": instance.WebSocketEnable,
+	}
+	if webhookURL != nil {
+		settings["webhook"] = *webhookURL
+	}
+	result := i.db.Model(instance).Clauses(clause.Returning{}).Updates(settings)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (i *instanceRepository) UpdateConnected(userId string, status bool, disconnectReason string) error {
